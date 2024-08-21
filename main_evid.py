@@ -368,7 +368,7 @@ def train_epoch(
         # Evidential learning
         y = one_hot_embedding(batch_y, 2)
         batch_loss = edl_digamma_loss(batch_out, y.float(), epoch, 2, 100, weight, device)
-        writer.add_scalar("loss_tmp", batch_loss, ii)
+        writer.add_scalar("loss_tmp", batch_loss, ii*(epoch+1))
 
         running_loss += batch_loss.item() * batch_size
         optim.zero_grad()
