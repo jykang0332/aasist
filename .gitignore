@@ -2,8 +2,8 @@
 _*
 .*
 exp_result/
-config/
-models/
+# config/
+# models/
 depreciated/
 LA/
 exp_result_*/
