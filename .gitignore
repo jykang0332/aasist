@@ -8,6 +8,8 @@ depreciated/
 LA/
 exp_result_*/
 check
+prob_eval/
+evid_eval/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
