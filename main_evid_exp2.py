@@ -27,6 +27,8 @@ from data_utils import (Dataset_ASVspoof2019_train,
 from evaluation import calculate_tDCF_EER
 from utils import create_optimizer, seed_worker, set_seed, str_to_bool
 
+from losses_exp import edl_digamma_loss, exp_evidence
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
@@ -130,7 +132,7 @@ def main(args: argparse.Namespace) -> None:
     for epoch in range(config["num_epochs"]):
         print("Start training epoch{:03d}".format(epoch))
         running_loss = train_epoch(trn_loader, model, optimizer, device,
-                                   scheduler, config)
+                                   scheduler, config, epoch, writer)
         produce_evaluation_file(dev_loader, model, device,
                                 metric_path/"dev_score.txt", dev_trial_path)
         dev_eer, dev_tdcf = calculate_tDCF_EER(
@@ -300,22 +302,40 @@ def produce_evaluation_file(
         trial_lines = f_trl.readlines()
     fname_list = []
     score_list = []
+    uncertainty_list = []
     for batch_x, utt_id in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
             _, batch_out = model(batch_x)
-            batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel()
+            # batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel()
+        
+            # Evid
+            evidence = exp_evidence(batch_out)
+            alpha = evidence + 1
+            u = 2 / torch.sum(alpha, dim=1, keepdim=True).squeeze(-1)
+            prob = alpha / torch.sum(alpha, dim=1, keepdim=True)
+            batch_score = (prob[:, 1]).data.cpu().numpy().ravel()
+
         # add outputs
         fname_list.extend(utt_id)
         score_list.extend(batch_score.tolist())
+        # Evid
+        uncertainty_list.extend(u.tolist())
 
     assert len(trial_lines) == len(fname_list) == len(score_list)
     with open(save_path, "w") as fh:
-        for fn, sco, trl in zip(fname_list, score_list, trial_lines):
+        # Evid
+        for fn, sco, trl, u in zip(fname_list, score_list, trial_lines, uncertainty_list):
             _, utt_id, _, src, key = trl.strip().split(' ')
             assert fn == utt_id
-            fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
+            fh.write("{} {} {} {} {}\n".format(utt_id, src, key, sco, u))
     print("Scores saved to {}".format(save_path))
+
+
+def one_hot_embedding(labels, num_classes=2):
+    # Convert to One Hot Encoding
+    y = torch.eye(num_classes)
+    return y[labels.to(y.device)]
 
 
 def train_epoch(
@@ -324,7 +344,9 @@ def train_epoch(
     optim: Union[torch.optim.SGD, torch.optim.Adam],
     device: torch.device,
     scheduler: torch.optim.lr_scheduler,
-    config: argparse.Namespace):
+    config: argparse.Namespace,
+    epoch,
+    writer):
     """Train the model for one epoch"""
     running_loss = 0
     num_total = 0.0
@@ -333,7 +355,7 @@ def train_epoch(
 
     # set objective (Loss) functions
     weight = torch.FloatTensor([0.1, 0.9]).to(device)
-    criterion = nn.CrossEntropyLoss(weight=weight)
+    # criterion = nn.CrossEntropyLoss(weight=weight)
     for batch_x, batch_y in trn_loader:
         batch_size = batch_x.size(0)
         num_total += batch_size
@@ -341,8 +363,13 @@ def train_epoch(
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
         _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]))
-        batch_loss = criterion(batch_out, batch_y)
-        print("Train loss: ", batch_loss)
+        # batch_loss = criterion(batch_out, batch_y)
+
+        # Evidential learning
+        y = one_hot_embedding(batch_y, 2)
+        batch_loss = edl_digamma_loss(batch_out, y.float(), epoch, 2, 100, weight, device)
+        print("Train loss: ", batch_loss.item())
+
         running_loss += batch_loss.item() * batch_size
         optim.zero_grad()
         batch_loss.backward()

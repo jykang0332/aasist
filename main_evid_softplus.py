@@ -27,7 +27,7 @@ from data_utils import (Dataset_ASVspoof2019_train,
 from evaluation import calculate_tDCF_EER
 from utils import create_optimizer, seed_worker, set_seed, str_to_bool
 
-from losses import edl_digamma_loss, relu_evidence
+from losses_softplus import edl_digamma_loss, softplus_evidence
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -310,7 +310,7 @@ def produce_evaluation_file(
             # batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel()
         
             # Evid
-            evidence = relu_evidence(batch_out)
+            evidence = softplus_evidence(batch_out)
             alpha = evidence + 1
             u = 2 / torch.sum(alpha, dim=1, keepdim=True).squeeze(-1)
             prob = alpha / torch.sum(alpha, dim=1, keepdim=True)
@@ -368,7 +368,7 @@ def train_epoch(
         # Evidential learning
         y = one_hot_embedding(batch_y, 2)
         batch_loss = edl_digamma_loss(batch_out, y.float(), epoch, 2, 100, weight, device)
-        writer.add_scalar("loss_tmp", batch_loss, ii*(epoch+1))
+        print("Train loss: ", batch_loss.item())
 
         running_loss += batch_loss.item() * batch_size
         optim.zero_grad()

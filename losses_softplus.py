@@ -116,7 +116,7 @@ def edl_digamma_loss(
 ):
     # if not device:
     #     device = get_device()
-    evidence = relu_evidence(output)
+    evidence = softplus_evidence(output)
     alpha = evidence + 1
     loss = torch.mean(
         edl_loss(
