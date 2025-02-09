@@ -67,7 +67,7 @@ def main(args: argparse.Namespace) -> None:
             track, prefix_2019))
 
     # define model related paths
-    model_tag = "{}_{}_ep{}_bs{}".format(
+    model_tag = "Test2_{}_{}_ep{}_bs{}".format(
         track,
         os.path.splitext(os.path.basename(args.config))[0],
         config["num_epochs"], config["batch_size"])
@@ -88,6 +88,24 @@ def main(args: argparse.Namespace) -> None:
 
     # define model architecture
     model = get_model(model_config, device)
+
+    # Load and freeze model
+    checkpoint = torch.load('./exp_result_evid_full/exp_result_evid_softplus/LA_AASIST_debug_ep100_bs24/weights/epoch_37_0.471.pth')
+    model.load_state_dict(checkpoint, strict=False)
+
+    for name, param in model.named_parameters():
+        if 'exit_' in name:
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+    
+    # for name, param in model.named_parameters():
+    #     print(f"{name}: {'Trainable' if param.requires_grad else 'Frozen'}")
+    
+    trainable_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
+    print('no. trainable model param:', trainable_params)
+    # frozen_params = sum(param.numel() for param in model.parameters() if not param.requires_grad)
+    # print(frozen_params)
 
     # define dataloaders
     trn_loader, dev_loader, eval_loader = get_loader(
@@ -134,13 +152,32 @@ def main(args: argparse.Namespace) -> None:
         print("Start training epoch{:03d}".format(epoch))
         running_loss = train_epoch(trn_loader, model, optimizer, device,
                                    scheduler, config)
-        produce_evaluation_file(dev_loader, model, device,
-                                metric_path/"dev_score.txt", dev_trial_path)
-        dev_eer, dev_tdcf = calculate_tDCF_EER(
-            cm_scores_file=metric_path/"dev_score.txt",
+        produce_evaluation_file_multi_exit(dev_loader, model, device,
+                                metric_path/"dev_score.txt", dev_trial_path, epoch)
+        dev_score_path = Path(metric_path/"dev_score.txt")
+        dev_S_exit_save_path = str(dev_score_path.with_suffix("")) + "_exit_S_{:03d}epo.txt".format(epoch)
+        dev_T_exit_save_path = str(dev_score_path.with_suffix("")) + "_exit_T_{:03d}epo.txt".format(epoch)
+        dev_ST_exit_save_path = str(dev_score_path.with_suffix("")) + "_exit_ST_{:03d}epo.txt".format(epoch)
+
+        dev_eer_S_exit, dev_tdcf_S_exit = calculate_tDCF_EER(
+            cm_scores_file=dev_S_exit_save_path,
             asv_score_file=database_path/config["asv_score_path"],
             output_file=metric_path/"dev_t-DCF_EER_{}epo.txt".format(epoch),
             printout=False)
+        dev_eer_T_exit, dev_tdcf_T_exit = calculate_tDCF_EER(
+            cm_scores_file=dev_T_exit_save_path,
+            asv_score_file=database_path/config["asv_score_path"],
+            output_file=metric_path/"dev_t-DCF_EER_{}epo.txt".format(epoch),
+            printout=False)
+        dev_eer_ST_exit, dev_tdcf_ST_exit = calculate_tDCF_EER(
+            cm_scores_file=dev_ST_exit_save_path,
+            asv_score_file=database_path/config["asv_score_path"],
+            output_file=metric_path/"dev_t-DCF_EER_{}epo.txt".format(epoch),
+            printout=False)
+        
+        dev_eer = min(dev_eer_S_exit, dev_eer_T_exit, dev_eer_ST_exit)
+        dev_tdcf = min(dev_tdcf_S_exit, dev_tdcf_T_exit, dev_tdcf_ST_exit)
+
         print("DONE.\nLoss:{:.5f}, dev_eer: {:.3f}, dev_tdcf:{:.5f}".format(
             running_loss, dev_eer, dev_tdcf))
         writer.add_scalar("loss", running_loss, epoch)
@@ -166,17 +203,11 @@ def main(args: argparse.Namespace) -> None:
 
 
                 produce_evaluation_file_multi_exit(eval_loader, model, device,
-                                        eval_score_path, eval_trial_path)
+                                        eval_score_path, eval_trial_path, epoch)
                 eval_score_path = Path(eval_score_path)
-                S_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_S.txt"
-                T_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_T.txt"
-                ST_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_ST.txt"
-
-                eval_eer, eval_tdcf = calculate_tDCF_EER(
-                    cm_scores_file=eval_score_path,
-                    asv_score_file=database_path / config["asv_score_path"],
-                    output_file=metric_path /
-                    "t-DCF_EER_{:03d}epo.txt".format(epoch))
+                S_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_S_{:03d}epo.txt".format(epoch)
+                T_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_T_{:03d}epo.txt".format(epoch)
+                ST_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_ST_{:03d}epo.txt".format(epoch)
                 
                 eval_eer_S_exit, eval_tdcf_S_exit = calculate_tDCF_EER(
                     cm_scores_file=S_exit_save_path,
@@ -195,6 +226,11 @@ def main(args: argparse.Namespace) -> None:
                     asv_score_file=database_path / config["asv_score_path"],
                     output_file=metric_path /
                     "t-DCF_EER_{:03d}epo_ST_exit.txt".format(epoch))
+                
+                print("Epoch: {}, eval_eer_S: {}, eval_eer_T: {}, eval_eer_ST: {}".format(epoch, eval_eer_S_exit, eval_eer_T_exit, eval_eer_ST_exit))
+
+                eval_eer = min(eval_eer_S_exit, eval_eer_T_exit, eval_eer_ST_exit)
+                eval_tdcf = min(eval_tdcf_S_exit, eval_tdcf_T_exit, eval_tdcf_ST_exit)
                 
                 log_text = "epoch{:03d}, ".format(epoch)
                 if eval_eer < best_eval_eer:
@@ -221,11 +257,32 @@ def main(args: argparse.Namespace) -> None:
         optimizer_swa.swap_swa_sgd()
         optimizer_swa.bn_update(trn_loader, model, device=device)
     produce_evaluation_file_multi_exit(eval_loader, model, device, eval_score_path,
-                            eval_trial_path)
-    eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
-                                             asv_score_file=database_path /
-                                             config["asv_score_path"],
-                                             output_file=model_tag / "t-DCF_EER.txt")
+                            eval_trial_path, epoch)
+
+    eval_score_path = Path(eval_score_path)
+    S_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_S_{:03d}epo.txt".format(epoch)
+    T_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_T_{:03d}epo.txt".format(epoch)
+    ST_exit_save_path = str(eval_score_path.with_suffix("")) + "_exit_ST_{:03d}epo.txt".format(epoch)
+
+    eval_eer_S_exit, eval_tdcf_S_exit = calculate_tDCF_EER(
+                    cm_scores_file=S_exit_save_path,
+                    asv_score_file=database_path / config["asv_score_path"],
+                    output_file=metric_path /
+                    "t-DCF_EER_{:03d}epo_S_exit.txt".format(epoch))
+    eval_eer_T_exit, eval_tdcf_T_exit = calculate_tDCF_EER(
+                    cm_scores_file=T_exit_save_path,
+                    asv_score_file=database_path / config["asv_score_path"],
+                    output_file=metric_path /
+                    "t-DCF_EER_{:03d}epo_T_exit.txt".format(epoch))
+    eval_eer_ST_exit, eval_tdcf_ST_exit = calculate_tDCF_EER(
+                    cm_scores_file=ST_exit_save_path,
+                    asv_score_file=database_path / config["asv_score_path"],
+                    output_file=metric_path /
+                    "t-DCF_EER_{:03d}epo_ST_exit.txt".format(epoch))
+    
+    eval_eer = min(eval_eer_S_exit, eval_eer_T_exit, eval_eer_ST_exit)
+    eval_tdcf = min(eval_tdcf_S_exit, eval_tdcf_T_exit, eval_tdcf_ST_exit)
+
     f_log = open(model_tag / "metric_log.txt", "a")
     f_log.write("=" * 5 + "\n")
     f_log.write("EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
@@ -328,7 +385,8 @@ def produce_evaluation_file_multi_exit(
     model,
     device: torch.device,
     save_path: str,
-    trial_path: str) -> None:
+    trial_path: str,
+    epoch) -> None:
     """Perform evaluation and save the score to a file"""
     model.eval()
     with open(trial_path, "r") as f_trl:
@@ -342,7 +400,7 @@ def produce_evaluation_file_multi_exit(
     u_S_exit_list = []
     u_T_exit_list = []
     u_ST_exit_list = []
-
+    save_path = Path(save_path)
     for batch_x, utt_id in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
@@ -374,7 +432,6 @@ def produce_evaluation_file_multi_exit(
             prob = alpha / torch.sum(alpha, dim=1, keepdim=True)
             ST_exit_score = (prob[:, 1]).data.cpu().numpy().ravel()
 
-
         # add outputs
         fname_list.extend(utt_id)
         score_list.extend(batch_score.tolist())
@@ -399,9 +456,9 @@ def produce_evaluation_file_multi_exit(
             fh.write("{} {} {} {} {}\n".format(utt_id, src, key, sco, u))
 
     save_path = Path(save_path)
-    S_exit_save_path = str(save_path.with_suffix("")) + "_exit_S.txt"
-    T_exit_save_path = str(save_path.with_suffix("")) + "_exit_T.txt"
-    ST_exit_save_path = str(save_path.with_suffix("")) + "_exit_ST.txt"
+    S_exit_save_path = str(save_path.with_suffix("")) + "_exit_S_{:03d}epo.txt".format(epoch)
+    T_exit_save_path = str(save_path.with_suffix("")) + "_exit_T_{:03d}epo.txt".format(epoch)
+    ST_exit_save_path = str(save_path.with_suffix("")) + "_exit_ST_{:03d}epo.txt".format(epoch)
     with open(S_exit_save_path, "w") as fh:
         for fn, sco, trl, u in zip(fname_list, gat_S_exit_score_list, trial_lines, u_S_exit_list):
             _, utt_id, _, src, key = trl.strip().split(' ')
@@ -434,6 +491,7 @@ def produce_evaluation_file(
         trial_lines = f_trl.readlines()
     fname_list = []
     score_list = []
+    u_list = []
     for batch_x, utt_id in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
@@ -448,13 +506,14 @@ def produce_evaluation_file(
         # add outputs
         fname_list.extend(utt_id)
         score_list.extend(batch_score.tolist())
+        u_list.extend(u_final.tolist())
 
     assert len(trial_lines) == len(fname_list) == len(score_list)
     with open(save_path, "w") as fh:
-        for fn, sco, trl in zip(fname_list, score_list, trial_lines):
+        for fn, sco, trl, u in zip(fname_list, score_list, trial_lines, u_list):
             _, utt_id, _, src, key = trl.strip().split(' ')
             assert fn == utt_id
-            fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
+            fh.write("{} {} {} {} {}\n".format(utt_id, src, key, sco, u))
     print("Scores saved to {}".format(save_path))
 
 
@@ -487,17 +546,19 @@ def train_epoch(
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
         # _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]))
-        _, batch_out, gat_S_exit, gat_T_exit, ST_exit = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]), exit=False)
+        # _, batch_out, gat_S_exit, gat_T_exit, ST_exit = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]), exit=False)
+        _, _, gat_S_exit, gat_T_exit, ST_exit = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]), exit=False)
         # batch_loss = criterion(batch_out, batch_y)
 
         # Evidential learning
         y = one_hot_embedding(batch_y, 2)
-        final_loss = edl_digamma_loss(batch_out, y.float(), 0, 2, 100, weight, device)
+        # final_loss = edl_digamma_loss(batch_out, y.float(), 0, 2, 100, weight, device)
         gat_S_loss = edl_digamma_loss(gat_S_exit, y.float(), 0, 2, 100, weight, device)
         gat_T_loss = edl_digamma_loss(gat_T_exit, y.float(), 0, 2, 100, weight, device)
         ST_loss = edl_digamma_loss(ST_exit, y.float(), 0, 2, 100, weight, device)
 
-        batch_loss = final_loss + gat_S_loss + gat_T_loss + ST_loss
+        # batch_loss = final_loss + gat_S_loss + gat_T_loss + ST_loss
+        batch_loss = gat_S_loss + gat_T_loss + ST_loss
 
         running_loss += batch_loss.item() * batch_size
         optim.zero_grad()
