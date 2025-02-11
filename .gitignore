@@ -1,6 +1,6 @@
 # etc
-_*
-.*
+# _*
+# .*
 exp_result/
 config/
 models/
